@@ -28,6 +28,7 @@ class FluvalbleScheduleCard extends HTMLElement {
     this.store = getScheduleStore(this.config);
     this.previewMinute = this.previewMinute ?? this.store.selectedMinute;
     this._subscribeStore();
+    this.startAutoClock();
     this.attachShadow({ mode: "open" });
     this.render();
   }
@@ -134,10 +135,7 @@ class FluvalbleScheduleCard extends HTMLElement {
       setScheduleMode(this.config, event.target.value, this);
       persistSchedule(this.config, this);
       if (this.store.mode === "auto") {
-        this.previewMinute = currentMinute();
-        setSelectedMinute(this.config, this.previewMinute, this);
-        this.updateLocalTimeDisplay();
-        this.applyChannels(interpolate(this.store.points, this.previewMinute));
+        this.syncToCurrentTime();
       }
       this.toast(`HA mode set to ${this.store.mode === "auto" ? "Auto" : "Manual"}`);
     });
@@ -229,10 +227,7 @@ class FluvalbleScheduleCard extends HTMLElement {
     this.callService("stop_preview", targetData(this.config));
 
     if ((this.store.previewRestoreMode || this.store.mode) === "auto") {
-      this.previewMinute = currentMinute();
-      setSelectedMinute(this.config, this.previewMinute, this);
-      this.updateLocalTimeDisplay();
-      this.applyChannels(interpolate(this.store.points, this.previewMinute));
+      this.syncToCurrentTime();
       return;
     }
 
@@ -267,8 +262,7 @@ class FluvalbleScheduleCard extends HTMLElement {
       }
       this.store.mode = result?.mode || "manual";
       if (this.store.mode === "auto") {
-        this.previewMinute = currentMinute();
-        this.store.selectedMinute = this.previewMinute;
+        this.syncToCurrentTime(false);
       }
       this.store.loaded = true;
       notifyScheduleStore(this.config, null);
@@ -288,11 +282,33 @@ class FluvalbleScheduleCard extends HTMLElement {
     const x = (this.previewMinute / 1440) * 720;
     const subtitle = root.getElementById("subtitle");
     const cursor = root.getElementById("cursor");
+    const timeInput = root.getElementById("time");
     if (subtitle) subtitle.textContent = `${time} preview`;
+    if (timeInput) timeInput.value = this.previewMinute;
     if (cursor) {
       cursor.setAttribute("x1", x);
       cursor.setAttribute("x2", x);
     }
+  }
+
+  syncToCurrentTime(notify = true) {
+    if (this.store.playing) return;
+    this.previewMinute = currentMinute();
+    if (notify) {
+      setSelectedMinute(this.config, this.previewMinute, this);
+    } else {
+      this.store.selectedMinute = this.previewMinute;
+    }
+    this.updateLocalTimeDisplay();
+  }
+
+  startAutoClock() {
+    if (this._autoClock) return;
+    this._autoClock = setInterval(() => {
+      if (this.store?.mode === "auto" && !this.store.playing) {
+        this.syncToCurrentTime();
+      }
+    }, 30000);
   }
 
   _subscribeStore() {
@@ -307,6 +323,10 @@ class FluvalbleScheduleCard extends HTMLElement {
 
   disconnectedCallback() {
     this.stopPreviewTimerOnly();
+    if (this._autoClock) {
+      clearInterval(this._autoClock);
+      this._autoClock = null;
+    }
     if (this._storeListener) {
       window.removeEventListener(SCHEDULE_STORE_EVENT, this._storeListener);
       this._storeListener = null;
